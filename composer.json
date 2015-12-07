@@ -1,0 +1,16 @@
+{
+    "name": "wtf/router",
+    "description": "The router for What The Framework",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "ct",
+            "email": "javachieveit@163.com"
+        }
+    ],
+    "minimum-stability": "stable",
+    "require": {},
+    "require-dev": {
+        "phpunit/phpunit": "^4.8"
+    }
+}
