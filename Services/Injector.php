@@ -79,7 +79,6 @@ class Injector
                     
                     $object = new $concrete(...$dependencies);
                 }
-                
             }
             else {
                 throw new Exception("Class Not Exists: Class '$concrete' is not required or can't be autoloaded.");
