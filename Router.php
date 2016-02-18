@@ -17,7 +17,6 @@ class Router
     private $namespace_stack = [];
     
     private $current_route = null;
-    private $current_host = null;
     
     public static function __callStatic($method, $args)
     {
@@ -25,35 +24,7 @@ class Router
             self::$self = new self();
         }
         
-        $self = self::$self;
-        
-        // http://php.net/manual/en/function.call-user-func-array.php#100794
-        switch (count($args)) {
-            case 0:
-                return $self->$method();
-
-            case 1:
-                return $self->$method($args[0]);
-
-            case 2:
-                return $self->$method($args[0], $args[1]);
-
-            case 3:
-                return $self->$method($args[0], $args[1], $args[2]);
-
-            case 4:
-                return $self->$method($args[0], $args[1], $args[2], $args[3]);
-
-            default:
-                return $self->$method(...$args);
-        }
-    }
-    
-    public function host($host, Closure $callback)
-    {
-        $this->host = $host;
-        $callback();
-        $this->host = null;
+        self::$self->$method(...$args);
     }
     
     public function context(Context $context, Closure $callback)
@@ -81,14 +52,14 @@ class Router
     
     public function prefix($prefix, Closure $callback)
     {
-        $this->prefix_stack[] = $statements['prefix'];
+        $this->prefix_stack[] = $prefix;
         $callback();
         array_pop($this->prefix_stack);
     }
     
-    public function namespace($host, Closure $callback)
+    public function namespace($namespace, Closure $callback)
     {
-        $this->namespace_stack[] = $statements['namespace'];
+        $this->namespace_stack[] = $namespace;
         $callback();
         array_pop($this->namespace_stack);
     }
@@ -120,53 +91,60 @@ class Router
     
     public function access($methods, $uri, $target)
     {
+        if (is_null($this->context)) {
+            $this->context = new Context();
+        }
+    
         //uri拼装
         $prefix = implode('', $this->prefix_stack);
         $uri = "{$prefix}{$uri}";
         
         //target拼装
-        //target支持两种类型，字符串类型（'{完全类名}@{方法}'） 和 闭包
         if (is_string($target)) {
             $namespace = implode('\\', $this->namespace_stack);
             $target = "$namespace\\$target";
         }
         
         //将middleware和target堆叠成可调用的闭包，即为当前路由对应的action
-        //借鉴于 Illuminate\Pipeline\Pipeline
+        // *借鉴于 Illuminate\Pipeline\Pipeline
         $pipes = array_reverse($this->middleware);
-        $action = array_reduce($pipes, function ($next, $pipe) {
-            return function ($request) use ($next, $pipe) {
-                //调用middle方法名为handle
-                if (is_string($pipe) && false !== strpos('@', $pipe)) {
-                    $pipe .= '@handle';
-                }
-                $this->context->call($pipe, array('request' => $request, 'next' => $next));
-            };
-        }, $target);
-    
-        //第一层：host映射
-        $host_map = &$this->routes_tree;
-        if (is_null($this->host)) {
-            $this->host = '*';
-        }
+        $action = array_reduce($pipes,
+            function ($next, $pipe) {
+                return function ($request, $response) use ($next, $pipe) {
+                    //调用middle方法名为handle
+                    if (is_string($pipe) && false !== strpos('@', $pipe)) {
+                        $pipe .= '@handle';
+                    }
+                    
+                    $this->context->call($pipe, [
+                        'request' => $request,
+                        'response' => $response,
+                        'next' => $next,
+                        'context' => $this->context
+                    ]);
+                };
+            },
+            function ($request, $response) use ($target) {
+                return $this->context->call($target, [
+                    'request' => $request,
+                    'response' => $response,
+                    'context' => $this->context
+                ]);
+            });
         
-        //第二层：method映射
-        $method_map = &$host_map[$this->host];
+        //routes tree构造
+        $method_map = &$this->routes_tree;
         foreach ($methods as $method) {
-            //第三层：URI类型（static/regex）映射
             $method = strtoupper($method);
             $type_map = &$method_map[$method];
             
             // if static
             if (!preg_match('/{[a-zA-Z_][a-zA-Z0-9_]*\??:.*?}/', $uri)) {
                 $route = [
-                    'host' => $this->host,
                     'uri' => $uri,
-
                     'action' => $target
                 ];
             
-                //第四之一层：静态URI映射
                 $static_uri_map = &$type_map['static'];
                 if (isset($static_uri_map[$uri])) {
                     throw new Exception("Route Redefine: The route '$uri' has already defined.");
@@ -211,14 +189,11 @@ class Router
                     }, $uri);
                 
                 $route = [
-                    'host' => $this->host,
                     'params' => $params,
                     'template' => $template,
-                
                     'action' => $action
                 ];
                 
-                //第四之二层：正则URI映射
                 $regex_uri_map = &$type_map['regex'];
                 if (isset($regex_uri_map[$regex])) {
                     throw new Exception("Route Redefine: An old route defined as '$regex' has already existed.");
@@ -227,7 +202,7 @@ class Router
             }
         }
         
-        $this->current_route = $route;
+        $this->current = $route;
         
         return $this;
     }
@@ -237,22 +212,13 @@ class Router
         if (isset($this->names_map[$name])) {
             throw new Exception("Name Conflict: You try to name two different route as '$name'.");
         }
-        $this->names_map[$name] = $this->current_route;
+        $this->names_map[$name] = $this->current;
     }
     
-    public function url($name, $args = [], $protocol = 'http')
+    public function uri($name, $args = [])
     {
         if (!isset($this->names_map[$name])) {
             throw new Exception("Name Not Exists: The route '$name' that you called is not exists.");
-        }
-        
-        // host
-        if ($this->names_map[$name]['host'] != '*') {
-            $host = $this->names_map[$name]['host'];
-        } else if ($this->current_request) {
-            $host = $this->current_host;
-        } else {
-            throw new Exception("URL Without Host: You try to get a url without host which is not recommended.");
         }
         
         // uri
@@ -273,18 +239,17 @@ class Router
             }
         }
         
-        return "{$protocol}://{$host}{$uri}";
+        return $uri;
     }
     
-    public function match($host, $method, $uri)
+    public function match($method, $uri)
     {
     	//数据完整性
-        if (empty($host) || empty($method) && empty($uri)) {
+        if (empty($method) && empty($uri)) {
             throw new Exception("Illegal Match: Router can't accept the fragmentary request.");
         }
         
-        $host_map = $this->routes_tree;
-        $method_map = $host_map[$host] ? : $host_map['*'];
+        $method_map = $this->routes_tree;
         
         if (!isset($method_map[$method])) {
         	return false;
@@ -294,16 +259,14 @@ class Router
         
         $static_uri_map = $type_map['static'];
         if (isset($static_uri_map[$uri])) {
-            $this->current_route = $static_uri_map[$uri];
-        	$this->current_host = $host;
+            $this->current = $static_uri_map[$uri];
             return true;
         }
         
         $regex_uri_map = $type_map['regex'];
         foreach ($regex_uri_map as $regex => $route) {
             if (preg_match("/$regex/", $uri)) {
-                $this->current_route = $route;
-                $this->current_host = $host;
+                $this->current = $route;
                 return true;
             }
         }
@@ -311,13 +274,13 @@ class Router
         return false;
     }
     
-    public function dispatch($request)
+    public function dispatch($request, $response)
     {
-        if (is_null($this->current_route)) {
+        if (is_null($this->current)) {
         	throw new Exception("Dispatch Fail: Can't dispatch a request before matching a route.");
         }
         
-        $action = $this->current_route['action'];
-        return $action($request);
+        $action = $this->current['action'];
+        return $action($request, $response);
     }
 }

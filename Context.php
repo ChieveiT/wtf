@@ -4,67 +4,67 @@ use Closure;
 
 class Context
 {
-    private static $pool = [];
-
     private $bindings = [];
-    private $instances = [];
+    private $singleton = [];
+    private $layer_stack = [];
     
     private $current = null;
     
     //用于避免循环依赖的跟踪数组
     private $fetching = [];
     
-    //创建一个context实例放入池中  或  从池中取出一个context实例
-    public static function pool($name, array $providers = [])
+    public function __construct(array $providers = [])
     {
-        if (!empty($providers)) {
-    	    $context = new self;
-    
-    	    foreach ($providers as $provider) {
-    		    if (!class_exists($provider)) {
-    			    throw new Exception("Provider Not Exists: Check your autoloader for '{$provider}'.");
-    		    }
+    	foreach ($providers as $provider) {
+    		if (!class_exists($provider)) {
+    			throw new Exception("Provider Not Exists: Check your autoloader for '{$provider}'.");
+    		}
     	
-    		    $provider::bind($context);
-    	    }
-    
-    	    $this->pool[$name] = $context;
+    		$provider::bind($this);
         }
-    
-        if (!isset($this->pool[$name])) {
-    	    throw new Exception("Context Not Exists: Make sure you have defined a context named '{$name}' before.");
-        }
-    
-        return $this->pool[$name];
+        
+        return $this;
     }
     
-    public function bind($abstract, $concrete)
+    public function bind($abstract, Closure $concrete)
     {
         if (isset($this->bindings[$abstract])) {
             throw new Exception("Service Redefine: The service called '$abstract' has already defined.");
         }
-    
+
         $this->bindings[$abstract] = $concrete;
-        
         $this->current = $abstract;
         
         return $this;
     }
     
-    public function lifeCycle($name)
+    public function singleton($abstract, Closure $concrete)
+    {
+        if (isset($this->bindings[$abstract])) {
+            throw new Exception("Service Redefine: The service called '$abstract' has already defined.");
+        }
+
+        $this->singleton[$abstract] = $concrete;
+        $this->current = $abstract;
+        
+        return $this;
+    }
+    
+    public function layer(Closure $life_cycle)
     {
         if (empty($this->current)) {
-            throw new Exception("No Concrete to Share: Make sure you have bound a concrete before sharing it.");
+            throw new Exception("No Concrete: You should bind a concrete before sharing it.");
         }
         
-        $this->instances[$name][$this->current] = true;
+        $this->share[$this->current] = true;
+        $this->current = null;
     }
     
     public function invoke($abstract)
     {
         //单例获取
-        if (isset($this->singleton[$abstract]) && $this->singleton[$abstract] !== true) {
-            return $this->singleton[$abstract];
+        if (isset($this->instances[$abstract]) && $this->instances[$abstract] !== true) {
+            return $this->instances[$abstract];
         }
         
         $concrete = $this->bindings[$abstract] ? : $abstract;
@@ -111,7 +111,7 @@ class Context
             }
         }
         //闭包
-        else if ($concrete instanceof Closure) {
+        else {
             $reflector = new ReflectionFunction($concrete);
             $dependencies = [];
             foreach ($reflector->getParameters() as $parameter) {
@@ -122,16 +122,12 @@ class Context
                 $dependencies[] = $this->invoke($class);
             }
             
-            $object = $reflector->invokeArgs($dependencies);
-        }
-        //其他
-        else {
-            $object = $concrete;
+            $object = $concrete(...$dependencies);
         }
         
         //单例存放
-        if (isset($this->singleton[$abstract]) && $this->singleton[$abstract] === true) {
-            $this->singleton[$abstract] = $object;
+        if (isset($this->instances[$abstract]) && $this->instances[$abstract] === true) {
+            $this->instances[$abstract] = $object;
         }
         
         return $object;
