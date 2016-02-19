@@ -1,6 +1,10 @@
-<?php namespace ChieveiT\WTF;
+<?php namespace WTF;
 
 use Closure;
+use Exception;
+use ReflectionClass;
+use ReflectionMethod;
+use ReflectionFunction;
 
 class Context
 {
@@ -9,19 +13,6 @@ class Context
     
     //用于避免循环依赖的跟踪数组
     private $fetching = [];
-    
-    public function __construct(array $providers = [])
-    {
-    	foreach ($providers as $provider) {
-    		if (!class_exists($provider)) {
-    			throw new Exception("Provider Not Exists: Check your autoloader for '{$provider}'.");
-    		}
-
-    		$provider::bind($this);
-        }
-        
-        return $this;
-    }
     
     public function bind($abstract, $concrete, $singleton = false)
     {
@@ -50,6 +41,7 @@ class Context
         
         //检测是否存在循环依赖
         if (in_array($abstract, $this->fetching)) {
+            $this->fetching[] = $abstract;
             $trace = implode(' -> ', $this->fetching);
             throw new Exception("Circular Dependencies: '$trace'.");
         }
@@ -82,7 +74,7 @@ class Context
                         if (is_null($class)) {
                             throw new Exception("Invoke Fail: Constructor of '$concrete' has a parameter without type hinting.");
                         }
-                        $dependencies[] = $this->invoke($class);
+                        $dependencies[] = $this->invoke($class->name);
                     }
                     
                     $object = new $concrete(...$dependencies);
@@ -101,7 +93,7 @@ class Context
                 if (is_null($class)) {
                     throw new Exception("Invoke Fail: Closure '$abstract' has a parameter without type hinting.");
                 }
-                $dependencies[] = $this->invoke($class);
+                $dependencies[] = $this->invoke($class->name);
             }
             
             $object = $concrete(...$dependencies);

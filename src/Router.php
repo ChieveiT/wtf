@@ -1,4 +1,4 @@
-<?php namespace ChieveiT\WTF;
+<?php namespace WTF;
 
 use Closure;
 use Exception;
