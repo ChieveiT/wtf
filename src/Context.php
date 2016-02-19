@@ -5,10 +5,7 @@ use Closure;
 class Context
 {
     private $bindings = [];
-    private $singleton = [];
-    private $layer_stack = [];
-    
-    private $current = null;
+    private $singletons = [];
     
     //用于避免循环依赖的跟踪数组
     private $fetching = [];
@@ -19,68 +16,53 @@ class Context
     		if (!class_exists($provider)) {
     			throw new Exception("Provider Not Exists: Check your autoloader for '{$provider}'.");
     		}
-    	
+
     		$provider::bind($this);
         }
         
         return $this;
     }
     
-    public function bind($abstract, Closure $concrete)
+    public function bind($abstract, $concrete, $singleton = false)
     {
+        if (!(is_string($concrete) || $concrete instanceof Closure)) {
+            throw new Exception("Binding Error: The binding called '$abstract' should be string or Closure.");
+        }
+    
         if (isset($this->bindings[$abstract])) {
-            throw new Exception("Service Redefine: The service called '$abstract' has already defined.");
+            throw new Exception("Binding Redefine: The binding called '$abstract' has already defined.");
         }
 
         $this->bindings[$abstract] = $concrete;
-        $this->current = $abstract;
-        
-        return $this;
-    }
-    
-    public function singleton($abstract, Closure $concrete)
-    {
-        if (isset($this->bindings[$abstract])) {
-            throw new Exception("Service Redefine: The service called '$abstract' has already defined.");
-        }
-
-        $this->singleton[$abstract] = $concrete;
-        $this->current = $abstract;
-        
-        return $this;
-    }
-    
-    public function layer(Closure $life_cycle)
-    {
-        if (empty($this->current)) {
-            throw new Exception("No Concrete: You should bind a concrete before sharing it.");
+        if (true == $singleton) {
+            $this->singletons[$abstract] = true;
         }
         
-        $this->share[$this->current] = true;
-        $this->current = null;
+        return $this;
     }
     
     public function invoke($abstract)
     {
         //单例获取
-        if (isset($this->instances[$abstract]) && $this->instances[$abstract] !== true) {
-            return $this->instances[$abstract];
+        if (isset($this->singletons[$abstract]) && $this->singletons[$abstract] !== true) {
+            return $this->singletons[$abstract];
         }
-        
-        $concrete = $this->bindings[$abstract] ? : $abstract;
         
         //检测是否存在循环依赖
-        if (in_array($concrete, $this->fetching)) {
+        if (in_array($abstract, $this->fetching)) {
             $trace = implode(' -> ', $this->fetching);
             throw new Exception("Circular Dependencies: '$trace'.");
-        } else {
-            $this->fetching[] = $concrete;
         }
+        
+        $this->fetching[] = $abstract;
+        
+        $concrete = $this->bindings[$abstract] ? : $abstract;
         
         //字符串（别名或类名）
         if (is_string($concrete)) {
             //更深的解析层次
             if (isset($this->bindings[$concrete])) {
+                array_pop($this->fetching);
                 $object = $this->invoke($concrete);
             }
             //对于存在的类，构造对象并进行构造方法的依赖注入
@@ -98,7 +80,7 @@ class Context
                     foreach ($constructor->getParameters() as $parameter) {
                         $class = $parameter->getClass();
                         if (is_null($class)) {
-                            throw new Exception("Invoke Fail: Constructor of '$abstract' has a parameter without type hinting.");
+                            throw new Exception("Invoke Fail: Constructor of '$concrete' has a parameter without type hinting.");
                         }
                         $dependencies[] = $this->invoke($class);
                     }
@@ -125,9 +107,11 @@ class Context
             $object = $concrete(...$dependencies);
         }
         
+        array_pop($this->fetching);
+        
         //单例存放
-        if (isset($this->instances[$abstract]) && $this->instances[$abstract] === true) {
-            $this->instances[$abstract] = $object;
+        if (isset($this->singletons[$abstract]) && $this->singletons[$abstract] === true) {
+            $this->singletons[$abstract] = $object;
         }
         
         return $object;

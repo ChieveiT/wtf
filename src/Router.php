@@ -12,7 +12,7 @@ class Router
     
     private $host = null;
     private $context = null;
-    private $middleware = [];
+    private $pipe_stack = [];
     private $prefix_stack = [];
     private $namespace_stack = [];
     
@@ -38,16 +38,16 @@ class Router
         $this->context = null;
     }
     
-    public function middleware($middleware, Closure $callback)
+    public function pipeline($pipe, Closure $callback)
     {
-        $origin_middleware = $this->middleware;
-        if (is_array($middleware)) {
-            $this->middleware = array_merge($this->middleware, $middleware);
+        $origin_pipe_stack = $this->pipe_stack;
+        if (is_array($pipe)) {
+            $this->pipe_stack = array_merge($this->pipe_stack, $pipe);
         } else {
-            $this->middleware[] = $middleware;
+            $this->pipe_stack[] = $pipe;
         }
         $callback();
-        $this->middleware = $origin_middleware;
+        $this->pipe_stack = $pipe_stack;
     }
     
     public function prefix($prefix, Closure $callback)
@@ -105,10 +105,10 @@ class Router
             $target = "$namespace\\$target";
         }
         
-        //将middleware和target堆叠成可调用的闭包，即为当前路由对应的action
+        //将pipes和target堆叠成可调用的闭包，即为当前路由对应的action
         // *借鉴于 Illuminate\Pipeline\Pipeline
-        $pipes = array_reverse($this->middleware);
-        $action = array_reduce($pipes,
+        $action = array_reduce(
+            array_reverse($this->pipe_stack),
             function ($next, $pipe) {
                 return function ($request, $response) use ($next, $pipe) {
                     //调用middle方法名为handle
@@ -130,7 +130,8 @@ class Router
                     'response' => $response,
                     'context' => $this->context
                 ]);
-            });
+            }
+        );
         
         //routes tree构造
         $method_map = &$this->routes_tree;
